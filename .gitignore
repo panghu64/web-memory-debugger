@@ -93,9 +93,10 @@ key.properties
 # ============================================
 # Research / Archive (可选)
 # ============================================
-# 如果不想公开研究数据，可以取消注释
-# research/
-# archive/
+# 研究数据和脚本仅保留在本地
+research/
+archive/research/
+scripts/
 
 # ============================================
 # APK / Build Artifacts
