@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内存调试器</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app">
+        <div class="container">
+            <!-- 左侧导航 -->
+            <nav class="sidebar">
+                <h2>内存调试器</h2>
+                <ul>
+                    <li :class="{active: currentView === 'processes'}" @click="currentView = 'processes'">
+                        进程管理
+                    </li>
+                    <li :class="{active: currentView === 'memory'}" @click="currentView = 'memory'">
+                        内存浏览器
+                    </li>
+                    <li :class="{active: currentView === 'hex'}" @click="currentView = 'hex'">
+                        Hex编辑器
+                    </li>
+                    <li :class="{active: currentView === 'disasm'}" @click="currentView = 'disasm'">
+                        反汇编视图
+                    </li>
+                    <li :class="{active: currentView === 'watchpoint'}" @click="currentView = 'watchpoint'">
+                        硬件断点
+                    </li>
+                    <li :class="{active: currentView === 'analysis'}" @click="currentView = 'analysis'">
+                        基址分析
+                    </li>
+                </ul>
+                <div class="selected-process" v-if="selectedPid">
+                    <strong>当前进程:</strong>
+                    <div>PID: {{selectedPid}}</div>
+                    <div v-if="selectedProcess">{{selectedProcess.name}}</div>
+                </div>
+            </nav>
+            
+            <!-- 主内容区 -->
+            <main class="content">
+                <!-- 进程列表视图 -->
+                <div v-if="currentView === 'processes'" class="view">
+                    <h1>进程管理</h1>
+                    
+                    <!-- 手动输入PID（主要入口） -->
+                    <div style="margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                        <h3 style="margin: 0 0 15px 0; font-size: 18px;">🎯 快速选择进程</h3>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="number" v-model.number="manualPid" placeholder="输入进程PID（例如：32288）" 
+                                   style="flex: 1; max-width: 300px; padding: 10px; border: none; border-radius: 4px; font-size: 16px;">
+                            <button @click="selectManualPid" style="background: #28a745; color: white; padding: 10px 24px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 16px;">
+                                ✅ 使用此PID
+                            </button>
+                        </div>
+                        <div style="margin-top: 12px; font-size: 13px; opacity: 0.9;">
+                            💡 推荐方式：直接输入PID并点击按钮，立即开始调试（无需等待进程列表加载）
+                        </div>
+                    </div>
+                    
+                    <!-- 进程列表（按需加载） -->
+                    <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #007bff;">
+                        <strong>📋 或从进程列表中选择：</strong>
+                        <button v-if="!processListLoaded" @click="loadProcesses()" style="margin-left: 10px; background: #007bff; color: white;">
+                            📥 加载进程列表
+                        </button>
+                        <span v-if="!processListLoaded" style="margin-left: 10px; color: #666; font-size: 12px;">
+                            （首次加载可能需要20秒，建议使用上方快速输入）
+                        </span>
+                        <template v-else>
+                            <div style="margin-top: 10px;">
+                                <input type="text" v-model="processSearch" placeholder="搜索进程..." style="width: 300px; margin-right: 10px;">
+                                <button @click="loadProcesses(true)" title="强制刷新（清除缓存）">🔄 刷新</button>
+                                <span style="margin-left: 10px; color: #666; font-size: 12px;">
+                                    已加载 {{processes.length}} 个进程
+                                </span>
+                            </div>
+                        </template>
+                    </div>
+                    
+                    <!-- 进程列表表格（仅在加载后显示） -->
+                    <div v-if="processListLoaded">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>进程名</th>
+                                    <th>用户</th>
+                                    <th>内存使用</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="filteredProcesses.length === 0">
+                                    <td colspan="5" style="text-align: center; color: #999; padding: 30px;">
+                                        没有找到匹配的进程
+                                    </td>
+                                </tr>
+                                <tr v-for="proc in filteredProcesses" :key="proc.pid" 
+                                    :class="{selected: proc.pid === selectedPid}">
+                                    <td>{{proc.pid}}</td>
+                                    <td>{{proc.name}}</td>
+                                    <td>{{proc.user}}</td>
+                                    <td>{{formatBytes(proc.memoryUsage)}}</td>
+                                    <td><button @click="selectProcess(proc)">选择</button></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else style="text-align: center; padding: 40px; color: #999;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">⚡</div>
+                        <div style="font-size: 18px; margin-bottom: 10px;">快速开始</div>
+                        <div style="font-size: 14px;">
+                            在上方输入PID即可立即开始调试，无需等待进程列表加载
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 内存映射视图 -->
+                <div v-if="currentView === 'memory'" class="view">
+                    <h1>内存映射</h1>
+                    <div v-if="!selectedPid" class="warning">请先选择一个进程</div>
+                    <div v-else>
+                        <button @click="loadMemoryMaps">刷新</button>
+                        <label><input type="checkbox" v-model="filterExecutable"> 只显示可执行</label>
+                        <label><input type="checkbox" v-model="filterWritable"> 只显示可写</label>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>起始地址</th>
+                                    <th>结束地址</th>
+                                    <th>大小</th>
+                                    <th>权限</th>
+                                    <th>路径</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="region in filteredMemoryRegions" :key="region.start">
+                                    <td>0x{{region.start}}</td>
+                                    <td>0x{{region.end}}</td>
+                                    <td>{{formatBytes(region.size)}}</td>
+                                    <td>{{region.perms}}</td>
+                                    <td class="path">{{region.path || '-'}}</td>
+                                    <td><button @click="hexAddress = region.start; currentView='hex'">查看</button></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- Hex编辑器视图 -->
+                <div v-if="currentView === 'hex'" class="view">
+                    <h1>Hex编辑器</h1>
+                    <div v-if="!selectedPid" class="warning">请先选择一个进程</div>
+                    <div v-else>
+                        <input type="text" v-model="hexAddress" placeholder="地址(十六进制)">
+                        <button @click="readHexData">读取</button>
+                        <div v-if="hexData" class="hex-view">
+                            <pre>{{hexData}}</pre>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 反汇编视图 -->
+                <div v-if="currentView === 'disasm'" class="view">
+                    <h1>反汇编视图</h1>
+                    <div v-if="!selectedPid" class="warning">请先选择一个进程</div>
+                    <div v-else>
+                        <input type="text" v-model="disasmAddress" placeholder="地址(十六进制)">
+                        <input type="number" v-model.number="disasmCount" placeholder="指令数量">
+                        <button @click="disassemble">反汇编</button>
+                        <table v-if="disasmLines.length > 0">
+                            <thead>
+                                <tr>
+                                    <th>地址</th>
+                                    <th>字节码</th>
+                                    <th>指令</th>
+                                    <th>操作数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="line in disasmLines" :key="line.address"
+                                    :class="{memaccess: line.isMemAccess || line.memAccess}">
+                                    <td>{{line.address}}</td>
+                                    <td class="bytes">{{line.bytes}}</td>
+                                    <td class="mnemonic">{{line.mnemonic}}</td>
+                                    <td>{{line.opStr}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- 硬件断点视图 -->
+                <div v-if="currentView === 'watchpoint'" class="view">
+                    <h1>硬件断点</h1>
+                    <div v-if="!selectedPid" class="warning">请先选择一个进程</div>
+                    <div v-else>
+                        <input type="text" v-model="watchpointAddress" placeholder="监控地址(十六进制)">
+                        <input type="number" v-model.number="watchpointTimeout" placeholder="超时(秒)" value="30">
+                        <button @click="setWatchpoint" :disabled="watchpointRunning">
+                            {{watchpointRunning ? '等待触发...' : '设置断点'}}
+                        </button>
+                        <div v-if="watchpointResult" class="result-panel">
+                            <h3>断点结果</h3>
+                            <div v-if="watchpointResult.triggered">
+                                <p><strong>触发地址:</strong> {{watchpointResult.pc}}</p>
+                                <p><strong>信号:</strong> {{watchpointResult.signal}}</p>
+                                <h4>寄存器状态:</h4>
+                                <table>
+                                    <thead>
+                                        <tr><th>寄存器</th><th>值</th><th>分析</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="(val, idx) in watchpointResult.registers" :key="idx">
+                                            <td>X{{idx}}</td>
+                                            <td>{{val}}</td>
+                                            <td><span v-if="isNearTarget(val)" class="suspicious">可疑</span></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                                <button @click="analyzeBase">分析基址</button>
+                            </div>
+                            <div v-else>
+                                <p class="error">未触发: {{watchpointResult.error}}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 基址分析视图 -->
+                <div v-if="currentView === 'analysis'" class="view">
+                    <h1>基址分析</h1>
+                    <div v-if="analysisResult">
+                        <h3>置信度: {{analysisResult.confidence}}%</h3>
+                        <h4>候选基址:</h4>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>寄存器</th>
+                                    <th>值</th>
+                                    <th>类型</th>
+                                    <th>偏移</th>
+                                    <th>来源</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(candidate, idx) in analysisResult.candidateBases" :key="idx">
+                                    <td>{{candidate.register}}</td>
+                                    <td>{{candidate.value}}</td>
+                                    <td>{{candidate.type}}</td>
+                                    <td>{{formatOffset(candidate.offset)}}</td>
+                                    <td>{{candidate.source || '-'}}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div v-else class="warning">
+                        请先在硬件断点视图中设置断点并触发，然后点击"分析基址"
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <!-- 引入库 - 使用国内CDN加速 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/vue/3.3.4/vue.global.prod.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/axios/1.5.0/axios.min.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
+
